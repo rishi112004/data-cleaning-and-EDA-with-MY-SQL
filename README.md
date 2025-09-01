@@ -13,14 +13,3 @@ This project builds a **reproducible SQL pipeline** that:
 - ✅ Retains meaningful **NULLs**, pruning rows that are analytically unusable.
 - ✅ Produces a **clean, analysis-ready dataset** for downstream dashboards and EDA.
 
----
-
-## 📊 Architecture (Data Flow)
-
-```mermaid
-flowchart TD
-    A[Raw CSV (layoffs.csv)] -->|Load| B[(world_layoffs.layoffs)]
-    B -->|Copy| C[(layoffs_staging)]
-    C -->|ROW_NUMBER (composite key)| D[(layoffs_staging2)]
-    D -->|Standardize + Normalize| E[(Cleaned Table)]
-    E -->|Analysis| F[Dashboards / EDA]
