@@ -1,0 +1,90 @@
+-- =============================================================
+-- Tech Layoffs — End‑to‑End SQL Data Cleaning Pipeline
+-- Source: Layoffs.fyi via Kaggle (2020–2025)
+-- Purpose: Create reliable, analysis‑ready data by staging, deduping,
+-- standardizing, typing, and pruning unusable records.
+-- =============================================================
+
+-- 0) Inspect raw
+SELECT *
+FROM world_layoffs.layoffs;
+
+-- 1) Staging: preserve raw, work in copies
+CREATE TABLE world_layoffs.layoffs_staging LIKE world_layoffs.layoffs;
+INSERT INTO world_layoffs.layoffs_staging SELECT * FROM world_layoffs.layoffs;
+
+-- 2) Duplicate analysis (wide key; avoids false positives on partial matches)
+-- Use windowing to flag duplicates, retain the first, drop the rest.
+WITH dups AS (
+SELECT company, location, industry, total_laid_off, percentage_laid_off, date, stage, country, funds_raised_millions,
+ROW_NUMBER() OVER (
+PARTITION BY company, location, industry, total_laid_off, percentage_laid_off, date, stage, country, funds_raised_millions
+ORDER BY company
+) AS rn
+FROM world_layoffs.layoffs_staging
+)
+SELECT * FROM dups WHERE rn > 1; -- review before deletion
+
+-- Create a numbered staging table to enable safe deletion
+CREATE TABLE world_layoffs.layoffs_staging2 (
+company TEXT,
+location TEXT,
+industry TEXT,
+total_laid_off INT,
+percentage_laid_off TEXT,
+date TEXT,
+stage TEXT,
+country TEXT,
+funds_raised_millions INT,
+row_num INT
+);
+
+INSERT INTO world_layoffs.layoffs_staging2
+( company, location, industry, total_laid_off, percentage_laid_off, date, stage, country, funds_raised_millions, row_num )
+SELECT company, location, industry, total_laid_off, percentage_laid_off, date, stage, country, funds_raised_millions,
+ROW_NUMBER() OVER (
+PARTITION BY company, location, industry, total_laid_off, percentage_laid_off, date, stage, country, funds_raised_millions
+ORDER BY company
+) AS row_num
+FROM world_layoffs.layoffs_staging;
+
+-- Deduplicate: keep the first occurrence per composite key
+DELETE FROM world_layoffs.layoffs_staging2 WHERE row_num >= 2;
+
+-- 3) Standardization and data typing
+-- 3a) Normalize empty strings to NULL (easier downstream handling)
+UPDATE world_layoffs.layoffs_staging2
+SET industry = NULL
+WHERE industry = '';
+
+-- 3b) Backfill missing industry within the same company (self‑join)
+UPDATE world_layoffs.layoffs_staging2 t1
+JOIN world_layoffs.layoffs_staging2 t2
+ON t1.company = t2.company
+SET t1.industry = t2.industry
+WHERE t1.industry IS NULL
+AND t2.industry IS NOT NULL;
+
+-- 3c) Harmonize industry vocabulary (e.g., crypto variants)
+UPDATE world_layoffs.layoffs_staging2
+SET industry = 'Crypto'
+WHERE industry IN ('Crypto Currency', 'CryptoCurrency');
+
+-- 3d) Standardize country naming (strip trailing punctuation)
+UPDATE world_layoffs.layoffs_staging2
+SET country = TRIM(TRAILING '.' FROM country);
+
+-- 3e) Normalize date strings -> DATE type
+UPDATE world_layoffs.layoffs_staging2
+SET date = STR_TO_DATE(date, '%m/%d/%Y');
+ALTER TABLE world_layoffs.layoffs_staging2
+MODIFY COLUMN date DATE;
+
+-- 4) Prune unusable records (no layoff count and no percentage)
+DELETE FROM world_layoffs.layoffs_staging2
+WHERE total_laid_off IS NULL
+AND percentage_laid_off IS NULL;
+
+-- 5) Final check
+SELECT * FROM world_layoffs.layoffs_staging2;
+
